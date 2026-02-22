@@ -1,0 +1,13 @@
+.idea
+.venv
+*.pyc
+
+# Perserv file structure
+outputs/*
+!outputs/__init__.py
+
+data/*
+!data/__init__.py
+!data/download_data.py
+!data/tokens/__init__.py
+!data/training_pairs/__init__.py
