@@ -1,7 +1,5 @@
 """
 train.py — CLI entry point
-Usage:
-  python train.py --epochs 5 --emb-dim 100 --neg-samples 5 --window 5
 """
 
 import argparse
@@ -15,7 +13,8 @@ from src.trainer import Trainer
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train Word2Vec (SGNS) in NumPy")
+    p = argparse.ArgumentParser(description="Train Word2Vec in NumPy")
+    p.add_argument("--variant",     default="sgns", choices=["sgns", "cbowns"], help="Model variant to train")
     p.add_argument("--corpus",      default="data/tokens/ten.txt")
     p.add_argument("--emb-dim",     type=int,   default=100)
     p.add_argument("--window",      type=int,   default=15)
@@ -25,7 +24,6 @@ def parse_args():
     p.add_argument("--lr",          type=float, default=0.025)
     p.add_argument("--subsample-t", type=float, default=1e-5)
     p.add_argument("--seed",        type=int,   default=42)
-    p.add_argument("--output",      default="outputs/embeddings.npy")
     return p.parse_args()
 
 
@@ -54,17 +52,17 @@ def main():
     # --- Step 3: Build training pairs ---
     print("\nBuilding training pairs...")
     time1 = time.time()
-    pairs = build_training_pairs(token_ids, vocab, args.window, args.neg_samples)
+    pairs = build_training_pairs(token_ids, vocab, args.window, args.neg_samples, args.variant)
     print(f"Built {len(pairs)} training pairs in {time.time() - time1:.2f} seconds")
 
     # --- Step 4: Initialise model ---
-    model = Word2Vec(vocab_size=len(vocab.idx2word), emb_dim=args.emb_dim, seed=args.seed)
+    model = Word2Vec(vocab_size=len(vocab.idx2word), emb_dim=args.emb_dim, seed=args.seed, variant=args.variant)
 
     # --- Step 5: Train - save the best embeddings in the proces ---
     print("\nTraining model...")
     time1 = time.time()
     input_file_name = args.corpus.split("/")[-1].split(".")[0]
-    out_file = f"outputs/{input_file_name}_emb_{args.emb_dim}_win_{args.window}_neg_{args.neg_samples}"
+    out_file = f"outputs/{input_file_name}_{args.variant}_emb_{args.emb_dim}_win_{args.window}_neg_{args.neg_samples}"
 
     trainer = Trainer(model, lr_start=args.lr)
     losses = trainer.train(pairs, epochs=args.epochs, save_file=out_file + ".npy")

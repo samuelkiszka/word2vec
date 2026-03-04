@@ -25,7 +25,7 @@ class Trainer:
 
     def train(
         self,
-        training_pairs: list,   # [(center_id, context_id, [neg_ids]), ...]
+        training_pairs: list,
         epochs: int = 5,
         save_file: str = "outputs/embeddings.npy",
     ) -> list[float]:
@@ -33,7 +33,8 @@ class Trainer:
         Run the full training loop.
         Returns list of per-epoch average losses.
         """
-        total_steps = epochs * len(training_pairs)
+        len_training_pairs = len(training_pairs)
+        total_steps = epochs * len_training_pairs
         step = 0
         losses = []
         best_loss = float("inf")
@@ -42,33 +43,18 @@ class Trainer:
             np.random.shuffle(training_pairs)  # in-place shuffle
             epoch_loss = 0.0
 
-            for center_id, context_id, neg_ids in tqdm(training_pairs, desc=f"Epoch {epoch+1}/{epochs}"):
-                # Forward pass
-                score_pos, score_neg = self.model.forward(center_id, context_id, neg_ids)
-                # Compute sigmoid scores for loss and gradients
-                sig_pos = sigmoid(np.array([score_pos]))[0] # scalar
-                sig_neg = sigmoid(score_neg)                # (K,)
-                # Compute loss
-                loss = ns_loss(sig_pos, sig_neg)
-                epoch_loss += loss
-                # Compute gradients
-                grad_w, grad_c, grad_neg = compute_gradients(
-                    v_w=self.model.W_in[center_id],
-                    v_c=self.model.W_out[context_id],
-                    v_neg=self.model.W_out[neg_ids],
-                    sig_pos=sig_pos,
-                    sig_neg=sig_neg,
-                )
+            if self.model.variant == "sgns":
+                for sample in tqdm(training_pairs, desc=f"Epoch {epoch + 1}/{epochs}"):
+                    lr = max(self.lr_start * (1 - step / total_steps), self.lr_min)
+                    epoch_loss += self._step_sgns(sample, lr)
+                    step += 1
+            else:  # cbowns
+                for sample in tqdm(training_pairs, desc=f"Epoch {epoch + 1}/{epochs}"):
+                    lr = max(self.lr_start * (1 - step / total_steps), self.lr_min)
+                    epoch_loss += self._step_cbowns(sample, lr)
+                    step += 1
 
-                # Update embeddings (sparse updates)
-                lr = max(self.lr_start * (1 - step / total_steps), self.lr_min)
-                self.model.W_in[center_id]   -= lr * grad_w
-                self.model.W_out[context_id] -= lr * grad_c
-                self.model.W_out[neg_ids]    -= lr * grad_neg
-
-                step += 1
-
-            avg_loss = epoch_loss / len(training_pairs)
+            avg_loss = epoch_loss / len_training_pairs
             losses.append(avg_loss)
 
             if avg_loss < best_loss:
@@ -78,6 +64,58 @@ class Trainer:
             print(f"Epoch {epoch+1} average loss: {avg_loss:.4f}")
 
         return losses
+
+    def _step_sgns(self, sample: tuple, lr: float):
+        center_id, context_id, neg_ids = sample
+        # Forward pass
+        score_pos, score_neg = self.model.forward_sgns(center_id, context_id, neg_ids)
+        # Compute sigmoid scores for loss and gradients
+        sig_pos = sigmoid(np.array([score_pos]))[0]  # scalar
+        sig_neg = sigmoid(score_neg)  # (K,)
+        # Compute loss
+        loss = ns_loss(sig_pos, sig_neg)
+        # Compute gradients
+        grad_w, grad_c, grad_neg = compute_gradients(
+            v_w=self.model.W_in[center_id],
+            v_c=self.model.W_out[context_id],
+            v_neg=self.model.W_out[neg_ids],
+            sig_pos=sig_pos,
+            sig_neg=sig_neg,
+        )
+
+        # Update embeddings (sparse updates)
+        self.model.W_in[center_id] -= lr * grad_w
+        self.model.W_out[context_id] -= lr * grad_c
+        self.model.W_out[neg_ids] -= lr * grad_neg
+
+        return loss
+
+    def _step_cbowns(self, sample: tuple, lr: float):
+        target_id, context_ids, neg_ids = sample
+        # Forward pass
+        h, score_pos, score_neg = self.model.forward_cbowns(target_id, context_ids, neg_ids)
+        # Compute sigmoid scores for loss and gradients
+        sig_pos = sigmoid(np.array([score_pos]))[0]  # scalar
+        sig_neg = sigmoid(score_neg)  # (K,)
+        # Compute loss
+        loss = ns_loss(sig_pos, sig_neg)
+        # Compute gradients
+        grad_h, grad_t, grad_neg = compute_gradients(
+            v_w=h,
+            v_c=self.model.W_out[target_id],
+            v_neg=self.model.W_out[neg_ids],
+            sig_pos=sig_pos,
+            sig_neg=sig_neg,
+        )
+        # Update embeddings (sparse updates)
+        self.model.W_out[target_id] -= lr * grad_t
+        self.model.W_out[neg_ids] -= lr * grad_neg
+
+        # distribute gradient equally to context embeddings
+        for context_id in context_ids:
+            self.model.W_in[context_id] -= lr * grad_h
+
+        return loss
 
     def save_embeddings(self, filename: str):
         np.save(filename, self.model.W_in)
